@@ -1,0 +1,5 @@
+adafruit-circuitpython-ssd1306
+adafruit-blinka
+# Pillow is installed via apt (python3-pil) and accessed through --system-site-packages
+gpiozero
+RPi.GPIO

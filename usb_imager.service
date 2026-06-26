@@ -1,0 +1,21 @@
+[Unit]
+Description=USB Imager — OLED disk management tool
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/usb_imager
+ExecStart=/home/pi/usb_imager/.venv/bin/python /home/pi/usb_imager/main.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=usb_imager
+
+# Allow time for I2C / GPIO to settle after boot
+ExecStartPre=/bin/sleep 3
+
+[Install]
+WantedBy=multi-user.target
