@@ -1027,6 +1027,155 @@ def build_nvme_secure_erase_flow(display, menu_system, button_queue):
 
 
 # ------------------------------------------------------------------ #
+# PiShrink (dd ONLY) flow
+# ------------------------------------------------------------------ #
+def build_pishrink_flow(display, menu_system, button_queue):
+    """
+    PiShrink (dd ONLY) flow:
+      1. Select disk → partition (or raw-mount a known filesystem)
+      2. Browse the mounted filesystem and pick a .dd image file
+      3. Confirm (shows source size + target .img name + free space)
+      4. pishrink.sh copies foo.dd -> foo.img and shrinks it in place
+      5. Unmount the partition on exit (success, cancel, or error)
+    """
+
+    _RAW_MOUNTABLE = {"vfat", "fat", "fat32", "fat16", "exfat", "ntfs",
+                      "ext4", "ext3", "ext2"}
+
+    state = {}  # mount tracked here for cleanup
+
+    def _cleanup():
+        mp = state.get("mount")
+        if mp:
+            try:
+                disk_ops.unmount(mp)
+                if mp in _active_mounts:
+                    _active_mounts.remove(mp)
+            except Exception:
+                pass
+            state.pop("mount", None)
+
+    def on_disk(disk_dev):
+        disk_name = disk_dev.replace("/dev/", "")
+        try:
+            parts = disk_ops.list_partitions(disk_name)
+        except Exception:
+            parts = []
+
+        if parts:
+            menu_system.push(
+                _build_partition_menu("Select Partition", disk_name, on_part)
+            )
+        else:
+            fstype = disk_ops.detect_fstype(disk_dev)
+            if fstype in _RAW_MOUNTABLE:
+                log.info("PiShrink: no partitions on %s, raw-mounting as %s",
+                         disk_dev, fstype)
+                on_part(disk_dev)
+            else:
+                display.draw_message([
+                    "No partitions &",
+                    "no known FS.",
+                    f"Found: {fstype or 'none'}",
+                    "",
+                    "Press any button",
+                ])
+                button_queue.get(timeout=15)
+
+    def on_part(dev):
+        mp = os.path.join(config.MOUNT_BASE, "pishrink_" + dev.replace("/dev/", ""))
+        try:
+            disk_ops.mount_partition(dev, mp)
+            _active_mounts.append(mp)
+            state["mount"] = mp
+        except Exception as e:
+            display.draw_message(["Mount failed:", str(e)[:22], "",
+                                  "Press any button"])
+            button_queue.get(timeout=15)
+            return
+
+        try:
+            _pick_and_run(mp, dev)
+        finally:
+            _cleanup()
+
+    def _pick_and_run(mount_point, dev):
+        browser = FileBrowser(display, mount_point, dev, pick_exts=(".dd",))
+
+        running = True
+        while running:
+            browser.render()
+            event = button_queue.get()
+            if event == config.BTN_A_LONG:
+                raise config.ReturnToMainMenu()
+            running = browser.handle_event(event)
+
+        src_dd = browser.picked_path
+        if not src_dd:
+            return  # user backed out at root without picking
+
+        # PiShrink can only shrink images whose last partition is ext2/3/4.
+        # Check up front so we don't do a full-size copy that's doomed to fail.
+        display.draw_message(["Checking image...", "", os.path.basename(src_dd)[:20]])
+        last_fs = disk_ops.get_image_last_fstype(src_dd)
+        if last_fs not in disk_ops.PISHRINK_OK_FS:
+            display.draw_message([
+                "Cannot shrink:",
+                "last partition is",
+                f"{last_fs or 'unknown'}, not ext.",
+                "",
+                "Press any button",
+            ])
+            button_queue.get(timeout=15)
+            return
+
+        stem = os.path.basename(src_dd)
+        stem = stem[:-3] if stem.lower().endswith(".dd") else os.path.splitext(stem)[0]
+        out_name = stem + ".img"
+
+        try:
+            src_size = os.path.getsize(src_dd)
+            free = disk_ops.get_free_space(mount_point)
+        except Exception as e:
+            display.draw_message(["Size check failed:", str(e)[:22], "",
+                                  "Press any button"])
+            button_queue.get(timeout=15)
+            return
+
+        if src_size > free:
+            display.draw_message([
+                "Not enough space!",
+                f"Need: {disk_ops._fmt_bytes(src_size)}",
+                f"Free: {disk_ops._fmt_bytes(free)}",
+                "",
+                "Press any button",
+            ])
+            button_queue.get(timeout=15)
+            return
+
+        ok = _confirm_screen(display, button_queue, [
+            "PiShrink?",
+            f"Src: {os.path.basename(src_dd)[:16]}",
+            f"Out: {out_name[:16]}",
+            f"Sz: {disk_ops._fmt_bytes(src_size)}",
+        ])
+        if not ok:
+            return
+
+        progress = {
+            "label":   "PiShrink...",
+            "percent": 0.0,
+            "done":    False,
+            "error":   "",
+        }
+        disk_ops.pishrink_image(src_dd, progress)
+        ps = ProgressScreen(display, button_queue, progress)
+        ps.run()
+
+    return _build_disk_menu("PiShrink: Disk", on_disk)
+
+
+# ------------------------------------------------------------------ #
 # Main menu construction
 # ------------------------------------------------------------------ #
 def build_shutdown_flow(display, button_queue):
@@ -1070,7 +1219,7 @@ def build_main_menu(display, menu_system, button_queue) -> MenuState:
             lambda: build_clone_disk_flow(display, menu_system, button_queue)
         ),
         SubMenuItem(
-            "Forensic Image (dcfldd)",
+            "RAW/dd Image (dcfldd)",
             lambda: build_forensic_image_flow(display, menu_system, button_queue)
         ),
         SubMenuItem(
@@ -1078,8 +1227,12 @@ def build_main_menu(display, menu_system, button_queue) -> MenuState:
             lambda: build_forensic_e01_flow(display, menu_system, button_queue)
         ),
         SubMenuItem(
-            "Image to VHDX",
+            "VHDX Image",
             lambda: build_vhd_image_flow(display, menu_system, button_queue)
+        ),
+        SubMenuItem(
+            "PiShrink (dd ONLY)",
+            lambda: build_pishrink_flow(display, menu_system, button_queue)
         ),
         build_shutdown_flow(display, button_queue),
     ], visible_rows=5)

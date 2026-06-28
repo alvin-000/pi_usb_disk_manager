@@ -30,7 +30,16 @@ sudo apt-get install -y \
     ntfs-3g \
     ewf-tools \
     nvme-cli \
-    qemu-utils
+    qemu-utils \
+    e2fsprogs \
+    gzip \
+    pigz \
+    xz-utils
+
+echo "==> Installing PiShrink..."
+sudo wget -O /usr/local/bin/pishrink.sh \
+    https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh
+sudo chmod +x /usr/local/bin/pishrink.sh
 
 echo "==> Creating install directory..."
 sudo mkdir -p "$INSTALL_DIR"
@@ -57,7 +66,7 @@ echo "==> Configuring sudoers for disk operations..."
 SUDOERS_FILE="/etc/sudoers.d/usb_imager"
 sudo tee "$SUDOERS_FILE" > /dev/null <<'EOF'
 # Allow pi user to run disk management commands without password
-pi ALL=(ALL) NOPASSWD: /bin/mount, /bin/umount, /sbin/blockdev, /bin/dd, /sbin/mkfs.fat, /sbin/mkfs.exfat, /usr/bin/rsync, /sbin/parted, /usr/sbin/parted, /bin/udevadm, /usr/bin/udevadm, /sbin/shutdown, /usr/sbin/shutdown, /usr/bin/dcfldd, /usr/bin/ewfacquire, /usr/sbin/nvme, /usr/bin/qemu-img
+pi ALL=(ALL) NOPASSWD: /bin/mount, /bin/umount, /sbin/blockdev, /bin/dd, /sbin/mkfs.fat, /sbin/mkfs.exfat, /usr/bin/rsync, /sbin/parted, /usr/sbin/parted, /bin/udevadm, /usr/bin/udevadm, /sbin/shutdown, /usr/sbin/shutdown, /usr/bin/dcfldd, /usr/bin/ewfacquire, /usr/sbin/nvme, /usr/bin/qemu-img, /usr/local/bin/pishrink.sh
 EOF
 sudo chmod 440 "$SUDOERS_FILE"
 sudo visudo -c  # Validate sudoers syntax
