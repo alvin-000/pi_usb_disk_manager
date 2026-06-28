@@ -50,8 +50,8 @@ Install Raspian on your raspberry pi. Name your user `pi`.
 Clone or copy the project files to your Raspberry Pi, then run the install script:
 
 ```bash
-git clone https://github.com/alvin-000/pi_usb_disk_manager.git /home/pi/usb_imager
-cd /home/pi/usb_imager
+git clone https://github.com/alvin-000/pi_usb_disk_manager.git /home/pi/install_files
+cd /home/pi/install_files
 bash install.sh
 ```
 
