@@ -1,4 +1,4 @@
-# USB Imager
+# Pi USB Disk Manager
 
 Turn your Raspberry Pi into a disk management appliance, from viewing files to wiping disks to cloning one disk onto another. Tool was largely written via agentic engineering workflow (aka LLM/AI); functionalities were individually verified. 
 
@@ -13,9 +13,10 @@ Turn your Raspberry Pi into a disk management appliance, from viewing files to w
 | Secure Erase (NVMe) | nvme-cli | Sanitize or Format NVM (crypto / block / user data) |
 | Copy Files | rsync | File-level copy between two mounted partitions |
 | Clone Disk | dd | Sector-by-sector disk clone |
-| Forensic Image (dcfldd) | dcfldd | Raw `.dd` image + SHA-256 hash log |
+| RAW/dd Image (dcfldd) | dcfldd | Raw `.dd` image + SHA-256 hash log |
 | Forensic Image (E01) | ewfacquire | EnCase E01 image with embedded MD5 + SHA-256 |
-| Image to VHDX | qemu-img | Dynamic VHDX image (Sparse Disk) |
+| VHDX Image | qemu-img | Dynamic VHDX image (Sparse Disk) |
+| PiShrink (dd ONLY) | pishrink.sh | Copy a `.dd` image to `.img` and shrink it to its minimum size |
 | Shutdown | shutdown | Safe OS shutdown with confirmation |
 
 All destructive operations require double confirmation. Long-pressing button A (5 seconds) from anywhere returns to the main menu. Forensics image ONLY meants images are stored in know forensics image formats; this project does NOT protect or writeblock your source disk in any way. This project is NOT a replacement for forensics imager validation.
@@ -49,8 +50,8 @@ Install Raspian on your raspberry pi. Name your user `pi`.
 Clone or copy the project files to your Raspberry Pi, then run the install script:
 
 ```bash
-git clone https://github.com/alvin-000/pi_usb_disk_manager.git /home/pi/usb_imager
-cd /home/pi/usb_imager
+git clone https://github.com/alvin-000/pi_usb_disk_manager.git /home/pi/install_files
+cd /home/pi/install_files
 bash install.sh
 ```
 

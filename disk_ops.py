@@ -741,6 +741,33 @@ def _parse_qemu_line(line: str) -> tuple[float | None, str]:
     return None, ""
 
 
+# pishrink stage → percent marker. PiShrink emits stage text (not byte progress),
+# so the bar advances in discrete steps as known stages appear in its output.
+_PISHRINK_STAGES = [
+    ("copying",                    10.0),
+    ("gathering data",             20.0),
+    ("checking filesystem",        35.0),
+    ("shrinking filesystem",       55.0),
+    ("zeroing any free space",     70.0),
+    ("shrinking partition",        85.0),
+    ("checking for unpartitioned", 95.0),
+    ("truncating image",           97.0),
+]
+
+
+def _parse_pishrink_line(line: str) -> float | None:
+    """
+    Map a pishrink.sh status line to a coarse percentage.
+    Returns a percent (0–100) or None if the line isn't a known stage.
+    The final 'Shrunk ... from X to Y' line is handled by the caller (100%).
+    """
+    low = line.lower()
+    for needle, pct in _PISHRINK_STAGES:
+        if needle in low:
+            return pct
+    return None
+
+
 def ewfacquire_image(src_dev: str, dst_mount: str, serial: str, progress: dict):
     """
     Create a forensic E01 image of src_dev using ewfacquire (ewf-tools).
@@ -1246,4 +1273,156 @@ def forensic_image(src_dev: str, dst_mount: str, serial: str, progress: dict):
             progress["done"] = True
 
     t = threading.Thread(target=_run_dcfldd, daemon=True)
+    t.start()
+
+
+# ------------------------------------------------------------------ #
+# PiShrink (dd ONLY)
+# ------------------------------------------------------------------ #
+# PiShrink can only shrink an image whose LAST partition is ext2/3/4.
+PISHRINK_OK_FS = {"ext2", "ext3", "ext4"}
+
+
+def get_image_last_fstype(img_path: str) -> str:
+    """
+    Return the filesystem type of the LAST partition inside a disk image,
+    as reported by parted's machine-readable output ('' if unknown/none).
+
+    This mirrors how PiShrink chooses the partition it will shrink — it always
+    operates on the last partition — so checking this field tells us up front
+    whether PiShrink can handle the image.
+
+    parted -ms emits one ';'-terminated line per partition:
+        num:start:end:size:fstype:name:flags;
+    so the fstype is field index 4 (0-based).
+    """
+    try:
+        r = _run(["sudo", "parted", "-ms", img_path, "unit", "B", "print"])
+    except Exception as e:
+        log.warning("get_image_last_fstype: parted failed for %s: %s", img_path, e)
+        return ""
+
+    last_fs = ""
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        # Partition rows start with the partition number; skip headers/blank
+        if not line or not line[0].isdigit():
+            continue
+        fields = line.rstrip(";").split(":")
+        if len(fields) >= 5:
+            last_fs = fields[4].strip().lower()
+    log.info("get_image_last_fstype: %s -> last partition fs '%s'",
+             img_path, last_fs or "(none)")
+    return last_fs
+
+
+def pishrink_image(src_dd: str, progress: dict):
+    """
+    Copy a .dd image to a same-named .img and shrink it with pishrink.sh.
+
+    PiShrink's two-argument form copies the source (cp --reflink=auto
+    --sparse=always) and then shrinks the copy, so the original .dd is never
+    modified. Output is written next to the source:
+
+        /path/foo.dd  ->  /path/foo.img   (shrunk, no compression)
+
+    Progress is stage-based: pishrink emits stage text rather than byte
+    progress, so the bar advances in discrete steps (see _PISHRINK_STAGES).
+
+    progress dict: label, percent, done, error
+    """
+    src_dir = os.path.dirname(src_dd)
+    base = os.path.basename(src_dd)
+    stem = base[:-3] if base.lower().endswith(".dd") else os.path.splitext(base)[0]
+    out_img = os.path.join(src_dir, stem + ".img")
+
+    log.info("pishrink_image: %s -> %s", src_dd, out_img)
+    progress["label"] = "PiShrink..."
+    progress["percent"] = 0.0
+
+    def _run_pishrink():
+        try:
+            # Don't clobber an existing output file
+            if os.path.exists(out_img):
+                raise DiskOpsError(f"{os.path.basename(out_img)} already exists")
+
+            # Space check: the two-arg form copies the source first. A sparse
+            # copy usually needs less, but require the full size as a safe bound.
+            try:
+                src_size = os.path.getsize(src_dd)
+                free = get_free_space(src_dir)
+                log.info("  src size: %s, free: %s",
+                         _fmt_bytes(src_size), _fmt_bytes(free))
+                if src_size > free:
+                    raise InsufficientSpaceError(src_size, free)
+            except InsufficientSpaceError:
+                raise
+            except Exception as e:
+                log.warning("  Could not pre-check space: %s", e)
+
+            # -n disables PiShrink's GitHub update check (no network call).
+            cmd = ["sudo", "pishrink.sh", "-n", src_dd, out_img]
+            log.info("  Running: %s", " ".join(cmd))
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # merge stderr for line parsing
+                text=True,
+                bufsize=1,
+            )
+
+            out_lines: list[str] = []
+            last_error_line = ""
+            for line in proc.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                log.debug("  pishrink: %s", line)
+                out_lines.append(line)
+
+                if "ERROR occurred" in line:
+                    last_error_line = line
+
+                # Final summary line: 'Shrunk foo.img from 30G to 3.1G ...'
+                if "shrunk" in line.lower() and "from" in line.lower():
+                    progress["percent"] = 100.0
+                    continue
+
+                pct = _parse_pishrink_line(line)
+                if pct is not None and pct > progress.get("percent", 0.0):
+                    progress["percent"] = pct
+
+            proc.wait()
+
+            if proc.returncode != 0:
+                log.error("  pishrink FAILED (exit %d)", proc.returncode)
+                for ln in out_lines[-10:]:
+                    log.error("    %s", ln)
+                # Surface the script's own error line if present
+                detail = ""
+                if last_error_line:
+                    m = re.search(r"ERROR occurred.*?:\s*(.*)", last_error_line)
+                    detail = m.group(1) if m else last_error_line
+                progress["error"] = (
+                    f"pishrink exit {proc.returncode}: {detail}" if detail
+                    else f"pishrink exit {proc.returncode}"
+                )
+                # Clean up a partial output file on failure
+                try:
+                    if os.path.exists(out_img):
+                        os.remove(out_img)
+                        log.info("  Removed partial output: %s", out_img)
+                except Exception as e:
+                    log.warning("  Could not remove partial output: %s", e)
+            else:
+                progress["percent"] = 100.0
+                log.info("  pishrink complete: %s", out_img)
+
+        except Exception as e:
+            progress["error"] = str(e)
+            log.exception("  pishrink exception: %s", e)
+        finally:
+            progress["done"] = True
+
+    t = threading.Thread(target=_run_pishrink, daemon=True)
     t.start()
