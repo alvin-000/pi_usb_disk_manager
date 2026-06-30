@@ -2,6 +2,9 @@
 
 Turn your Raspberry Pi into a disk management appliance, from viewing files to wiping disks to cloning one disk onto another. Tool was largely written via agentic engineering workflow (aka LLM/AI); functionalities were individually verified. 
 
+<img width="1218" height="980" alt="image" src="https://github.com/user-attachments/assets/e36af1b4-9017-4982-9c1a-989d151ef52a" /><img width="1568" height="1016" alt="image" src="https://github.com/user-attachments/assets/7ea341fa-320e-4f7a-b810-ce7008dc7205" />
+
+
 
 ## Features
 
@@ -27,7 +30,7 @@ Raspberry Pi Zero or above
 - Pi Zero is compatible with USB HAT or USB extension
 - Using a Pi 4 will be fastest as it has USB 3.0 ports and you can skip the USB HAT
 
-Adafruit Bonnet OLED for Pi https://www.adafruit.com/product/3531\
+[Adafruit Bonnet OLED for Pi](https://www.adafruit.com/product/3531)\
 microSD for Raspian OS (8GB+)\
 Power Supply for your Pi
 
